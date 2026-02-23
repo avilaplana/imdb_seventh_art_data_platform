@@ -1,3 +1,4 @@
-ollama>=0.1.0        # Ollama Python client for local LLaMA models
-rich>=13.0           # Optional, for nice console output
-python-dotenv>=1.0   # Optional, for environment variables (if needed)
+ollama==0.3.0
+jaydebeapi==1.2.3
+JPype1>=1.5.0
+rich==13.6.0
