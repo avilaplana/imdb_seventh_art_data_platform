@@ -113,7 +113,9 @@ SQL:
     def _generate_sql(self, user_query: str) -> str:
         prompt = self._build_prompt(user_query)
         response = self._llm_client.chat(
-            model=LLM_MODEL, messages=[{"role": "user", "content": prompt}]
+            model=LLM_MODEL, 
+            messages=[{"role": "user", "content": prompt}],
+            options={ "num_ctx": 16384 }
         )
         content_lines = response["message"]["content"].splitlines()
         if content_lines and "```sql" in content_lines[0]:

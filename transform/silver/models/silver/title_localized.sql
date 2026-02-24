@@ -1,8 +1,8 @@
 WITH title_akas_cleaned AS (
   SELECT
-    titleId as title_id, 
-    title as title,
-    ordering as ordering,
+    titleId AS title_id, 
+    title AS title,
+    CAST(ordering AS INT) AS ordering,
     CASE
         WHEN region = '\\N' THEN NULL
         ELSE region
