@@ -212,7 +212,7 @@ For each title, find how many localized versions exist, and identify titles that
 
 **Solution:**
 
-
+```sql
 WITH localization_base AS (
     -- One row per (title, language, region)
     SELECT
@@ -266,6 +266,7 @@ JOIN demo.silver.title t
     ON wmr.title_id = t.title_id
 WHERE wmr.total_localizations >= 5
   AND SIZE(wmr.missing_regions) >= 2
+```
 
 ---
 
@@ -278,6 +279,7 @@ Find all actors (role_name = 'actor') who have worked with at least 3 different 
 
 **Solution:**
 
+```sql
 WITH actor_director_titles AS (
     SELECT
         a.person_id      AS actor_id,
@@ -335,7 +337,7 @@ GROUP BY
 ORDER BY
     ad.actor_id,
     ad.director_id
-
+```
 ---
 
 ## Window Functions and Analytics
@@ -346,6 +348,32 @@ For each genre, rank all titles by their average rating (considering only titles
 **Expected Output Columns:** genre_name, title_id, primary_title, average_rating, genre_rank, percentile_rank
 
 **Difficulty:** ⭐⭐⭐⭐
+
+**Solution:**
+
+```sql
+WITH genre_rank AS (
+	SELECT 
+		g.genre_name,
+		t.title_id, 
+		t.primary_title, 
+		t.average_rating,
+		ROW_NUMBER() OVER (PARTITION BY g.genre_name ORDER BY t.average_rating DESC) AS genre_rank,
+		PERCENT_RANK() OVER (PARTITION BY g.genre_name ORDER BY t.average_rating DESC) AS percentile_rank
+	FROM demo.silver.title t
+	JOIN demo.silver.genre_title tg
+	ON t.title_id = tg.title_id
+	JOIN demo.silver.genre g
+	ON tg.genre_id = g.genre_id
+	WHERE t.number_of_votes >= 100
+	ORDER BY g.genre_name
+)
+
+SELECT 
+	* 
+FROM genre_rank
+WHERE genre_rank <= 3
+```
 
 ---
 
