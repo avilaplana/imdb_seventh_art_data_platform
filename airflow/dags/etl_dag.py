@@ -78,7 +78,7 @@ with DAG(
     # Step 3: Install DBT dependencies #
     ############################################
     projects_dir = os.environ["PROJECTS_DIR"]
-
+    
     dbt_deps_command = """deps
     --project-dir /usr/app/dbt/silver
     """
