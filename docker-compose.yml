@@ -235,9 +235,42 @@ services:
     networks:
       iceberg_net:
 
+# #####################################
+# # ---------- Ollama LLM engine ------
+# #####################################
+
+#   ollama:
+#     image: ollama/ollama:latest
+#     container_name: ollama
+#     ports:
+#       - "11434:11434"
+#     volumes:
+#       - ollama_data:/root/.ollama
+#     healthcheck:
+#       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+#     restart: unless-stopped
+
+#   ollama-model-loader:
+#     image: curlimages/curl:latest
+#     depends_on:
+#       ollama:
+#         condition: service_healthy
+#     command: >
+#       sh -c "
+#         echo 'Pulling qwen2.5-coder:7b...' &&
+#         curl -s http://ollama:11434/api/pull -d '{\"name\": \"qwen2.5-coder:7b\"}' &&
+#         echo 'Done, keeping sidecar alive' &&
+#         tail -f /dev/null
+#       "
+#     restart: "no"
+
 volumes:
   postgres_db_volume:
   minio_data:
+  # ollama_data:
 
 networks:
   iceberg_net:
