@@ -2,6 +2,9 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 from airflow.providers.docker.operators.docker import DockerOperator
+from airflow.models import Variable
+from airflow.exceptions import AirflowSkipException
+from airflow.utils.trigger_rule import TriggerRule
 from docker.types import Mount
 from spark_utils import build_spark_submit
 from datetime import datetime, timedelta
@@ -15,6 +18,36 @@ default_args = {
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
+
+##################################################
+# FEATURE FLAG
+##################################################
+
+GLOBAL_EXTRACT_FLAG = "ENABLE_EXTRACT_STAGE"
+
+##################################################
+# FEATURE FLAG HELPER
+##################################################
+
+def skip_if_disabled(flag_name: str):
+    enabled = Variable.get(flag_name, "true").lower() == "true"
+    if not enabled:
+        raise AirflowSkipException(f"{flag_name} disabled")
+
+##################################################
+# TASK CALLABLE
+##################################################
+
+def run_extract(script_name: str):
+    # One global switch for ALL extract tasks
+    skip_if_disabled(GLOBAL_EXTRACT_FLAG)
+
+    module = __import__(script_name)
+    module.main()
+
+##################################################
+# DAG
+##################################################
 
 with DAG(
     "daily_prod_etl_medallion",
@@ -45,7 +78,8 @@ with DAG(
     for script in extract_raw_scripts:
         extract_task = PythonOperator(
             task_id=f"{script}",
-            python_callable=lambda script=script: __import__(script).main(),
+            python_callable=run_extract,
+            op_kwargs={"script_name": script},
         )
         extract_tasks.append(extract_task)
 
@@ -64,7 +98,7 @@ with DAG(
         "load_to_iceberg_title_ratings"
         ]
     spark_bronze_tasks = []
-    
+
     for job in load_bronze_jobs:
         spark_task_id = f"load_SPARK_bronze_{job}"
         spark_task = BashOperator(
@@ -183,5 +217,12 @@ with DAG(
         mount_tmp_dir=False,
     )
    
+    extract_tasks >> spark_bronze_tasks[0]
 
-    extract_tasks >> spark_bronze_tasks[0] >> spark_bronze_tasks[1:8] >> dbt_deps_task >> dbt_seed_task >> dbt_silver_run_task >> dbt_silver_validation_task
+    spark_bronze_tasks[0].trigger_rule = TriggerRule.NONE_FAILED
+
+    spark_bronze_tasks[0] >> spark_bronze_tasks[1:8] >> \
+        dbt_deps_task >> \
+        dbt_seed_task >> \
+        dbt_silver_run_task >> \
+        dbt_silver_validation_task
