@@ -462,7 +462,8 @@ WITH person_general_metric AS (
         ON p.person_id = tpr.person_id
     JOIN demo.silver.title t 
         ON tpr.title_id = t.title_id
-    WHERE t.release_year IS NOT NULL
+    WHERE (p.death_year IS NULL OR t.release_year <= p.death_year)
+    AND t.release_year IS NOT NULL
     GROUP BY p.person_id, p.name
 ),
 
