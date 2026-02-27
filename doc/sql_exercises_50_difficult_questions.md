@@ -443,6 +443,84 @@ For each person, find their career progression by identifying the year they firs
 
 **Difficulty:** ⭐⭐⭐⭐
 
+**Solution:**
+
+```sql
+WITH person_general_metric AS (
+    SELECT 
+        p.person_id,
+        p.name,
+        MIN(t.release_year) AS first_appearance_year,
+        MAX(t.release_year) AS last_appearance_year,
+        MAX(t.release_year) - MIN(t.release_year) + 1 AS total_years_active,
+        CASE 
+            WHEN MAX(t.release_year) >= YEAR(CURDATE()) - 2 THEN 1
+            ELSE 0
+        END AS is_active
+    FROM demo.silver.person p
+    JOIN demo.silver.title_person_role tpr 
+        ON p.person_id = tpr.person_id
+    JOIN demo.silver.title t 
+        ON tpr.title_id = t.title_id
+    WHERE t.release_year IS NOT NULL
+    GROUP BY p.person_id, p.name
+),
+
+person_title_year_metric AS (
+    SELECT 
+        p.person_id, 
+        t.release_year,
+        COUNT(DISTINCT t.title_id) AS titles_per_year
+    FROM demo.silver.person p
+    JOIN demo.silver.title_person_role tpr 
+        ON p.person_id = tpr.person_id
+    JOIN demo.silver.title t 
+        ON tpr.title_id = t.title_id
+    WHERE t.release_year IS NOT NULL
+    GROUP BY p.person_id, t.release_year
+),
+
+title_year_change_metric AS (
+    SELECT 
+        person_id,
+        release_year,
+        titles_per_year
+            - LAG(titles_per_year) OVER (
+                PARTITION BY person_id 
+                ORDER BY release_year
+              ) AS titles_per_year_change
+    FROM person_title_year_metric
+),
+
+latest_year_change AS (
+    SELECT *
+    FROM (
+        SELECT 
+            person_id,
+            titles_per_year_change,
+            ROW_NUMBER() OVER (
+                PARTITION BY person_id 
+                ORDER BY release_year DESC
+            ) AS rn
+        FROM title_year_change_metric
+    ) x
+    WHERE rn = 1
+)
+
+SELECT 
+    pgm.person_id,
+    pgm.name,
+    pgm.first_appearance_year,
+    pgm.last_appearance_year,
+    pgm.total_years_active,
+    lyc.titles_per_year_change,
+    pgm.is_active
+FROM person_general_metric pgm
+LEFT JOIN latest_year_change lyc
+    ON pgm.person_id = lyc.person_id
+ORDER BY pgm.person_id
+```
+
 ---
 
 ### Question 9: Window Functions with Multiple Partitions
