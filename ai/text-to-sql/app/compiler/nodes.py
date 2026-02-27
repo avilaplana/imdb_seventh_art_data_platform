@@ -2,7 +2,7 @@ from .state import RunnerState
 from . import capabilities
 
 def generate_node(state: RunnerState) -> dict:
-    sql = capabilities.generate_sql(state["user_query"])
+    sql = capabilities.generate_sql(state["user_query"], state["model"], state["version"])
     return {"sql": sql, "error": None}
 
 def execute_node(state: RunnerState) -> dict:

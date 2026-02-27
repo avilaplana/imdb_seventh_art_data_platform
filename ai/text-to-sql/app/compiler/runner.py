@@ -5,9 +5,11 @@ class TextToSQLRunner:
     def __init__(self):
         self.graph = build_graph()
 
-    def run(self, question: str) -> dict:
+    def run(self, question: str, model: str, version: int) -> dict:
         state: RunnerState = {
             "user_query": question,
+            "model": model,
+            "version": version,
             "sql": None,
             "result": None,
             "error": None,

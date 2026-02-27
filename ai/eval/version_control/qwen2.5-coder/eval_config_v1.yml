@@ -1,0 +1,424 @@
+eval_config:
+  version: 1
+  model: "qwen2.5-coder:7b"  
+  description: >
+    Baseline config: full silver schema, initial semantic layer,
+    base prompt without examples, low temperature for deterministic SQL.
+  window_size: 16384
+  prompt_templates:    
+    system: |
+      You are a SQL expert. Generate Spark SQL based ONLY on the following database schema and
+      semantic layer. Only output valid SQL, no explanations or markdown fences.
+
+    user_template: |
+      Given the following database schema:
+      
+      {{ schema_block }}
+
+      And the following semantic layer:
+      
+      {{ semantic_block }}
+
+      Generate a single Spark SQL query that answers the following question:
+      
+      "{{ question }}"
+
+      Requirements:
+      - Only output SQL, no explanations.
+      - Do not include markdown code fences.
+      - Do not use tables or columns that are not in the schema.
+      - Prefer explicit joins and avoid SELECT *.
+
+    schema_block: |
+      {
+        "catalog": "demo",
+        "schema": "silver",
+        "tables": [
+          {
+            "name": "attribute",
+            "description": "Lookup table describing attributes associated with localized titles, such as alternative titles, original titles, or other naming qualifiers.",
+            "columns": [
+              {"name": "attribute_id", "description": "Primary key identifying a title attribute", "type": "string"},
+              {"name": "attribute_name", "description": "Human-readable name of the title attribute", "type": "string"}
+            ]
+          },
+          {
+            "name": "genre",
+            "description": "Lookup table containing all possible genres that can be associated with IMDb titles.",
+            "columns": [
+              {"name": "genre_id", "description": "Primary key identifying a genre", "type": "string"},
+              {"name": "genre_name", "description": "Name of the genre (e.g. Drama, Comedy, Action)", "type": "string"}
+            ]
+          },
+          {
+            "name": "genre_title",
+            "description": "Bridge table mapping titles to genres. A title can belong to multiple genres.",
+            "columns": [
+              {"name": "title_id", "description": "Foreign key to title", "type": "string"},
+              {"name": "genre_id", "description": "Foreign key to genre", "type": "string"}
+            ]
+          },
+          {
+            "name": "languages",
+            "description": "Reference table of supported language codes.",
+            "columns": [
+              {"name": "language_id", "description": "Stable surrogate key for the language", "type": "bigint"},
+              {"name": "language_code", "description": "ISO 639 language code", "type": "string"},
+              {"name": "iso_standard", "description": "ISO standard or classification for the language code", "type": "string"},
+              {"name": "language_name", "description": "English display name of the language", "type": "string"},
+              {"name": "notes", "description": "Additional context such as macrolanguage, historical usage, or private-use notes", "type": "string"}
+            ]
+          },
+          {
+            "name": "person",
+            "description": "Master table containing people involved in titles, such as actors, directors, writers, and other crew members.",
+            "columns": [
+              {"name": "person_id", "description": "Primary key identifying a person", "type": "string"},
+              {"name": "name", "description": "Full name of the person", "type": "string"},
+              {"name": "birth_year", "description": "Year the person was born", "type": "int"},
+              {"name": "death_year", "description": "Year the person died, if applicable", "type": "int"}
+            ]
+          },
+          {
+            "name": "regions",
+            "description": "Reference table of regions and countries based on ISO 3166-1.",
+            "columns": [
+              {"name": "region_id", "description": "Surrogate identifier for the region", "type": "bigint"},
+              {"name": "region_code", "description": "Region or country code as received from source systems", "type": "string"},
+              {"name": "iso_standard", "description": "Classification of the region code standard", "type": "string"},
+              {"name": "region_name", "description": "Canonical English name of the region or country", "type": "string"},
+              {"name": "notes", "description": "Optional contextual notes describing historical status, political changes, or source-specific meaning", "type": "string"}
+            ]
+          },
+          {
+            "name": "role",
+            "description": "Lookup table defining high-level roles a person can have in relation to a title (e.g. Actor, Director).",
+            "columns": [
+              {"name": "role_id", "description": "Primary key identifying a role", "type": "string"},
+              {"name": "role_name", "description": "Name of the role", "type": "string"}
+            ]
+          },
+          {
+            "name": "role_person",
+            "description": "Bridge table mapping people to roles they can perform, independent of a specific title.",
+            "columns": [
+              {"name": "person_id", "description": "Foreign key to person", "type": "string"},
+              {"name": "role_id", "description": "Foreign key to role", "type": "string"},
+              {"name": "job", "description": "Specific job description associated with the role", "type": "string"}
+            ]
+          },
+          {
+            "name": "title",
+            "description": "Core table representing IMDb titles such as movies, TV series, and episodes.",
+            "columns": [
+              {"name": "title_id", "description": "Primary key identifying a title", "type": "string"},
+              {"name": "title_type_id", "description": "Foreign key indicating the type of title", "type": "string"},
+              {"name": "primary_title", "description": "Main display title used by IMDb", "type": "string"},
+              {"name": "original_title", "description": "Original title in the language of production", "type": "string"},
+              {"name": "is_adult", "description": "Indicates whether the title is intended for adults", "type": "boolean"},
+              {"name": "release_year", "description": "Year the title was first released", "type": "int"},
+              {"name": "duration_minutes", "description": "Runtime of the title in minutes", "type": "int"},
+              {"name": "average_rating", "description": "Average IMDb user rating for the title", "type": "string"},
+              {"name": "number_of_votes", "description": "Number of user votes contributing to the average rating", "type": "string"}
+            ]
+          },
+          {
+            "name": "title_episode",
+            "description": "Table representing episodic relationships between titles, linking episodes to their parent TV series.",
+            "columns": [
+              {"name": "episode_title_id", "description": "Foreign key to the episode title", "type": "string"},
+              {"name": "series_title_id", "description": "Foreign key to the TV series title", "type": "string"},
+              {"name": "season_number", "description": "Season number of the episode", "type": "int"},
+              {"name": "episode_number", "description": "Episode number within the season", "type": "int"}
+            ]
+          },
+          {
+            "name": "title_localized",
+            "description": "Table containing localized versions of titles by region and language, including alternative and original titles.",
+            "columns": [
+              {"name": "title_id", "description": "Foreign key to the title", "type": "string"},
+              {"name": "title", "description": "Localized title text", "type": "string"},
+              {"name": "ordering", "description": "Ordering index when multiple localized titles exist", "type": "string"},
+              {"name": "region_id", "description": "Region where the localized title is used", "type": "bigint"},
+              {"name": "language_id", "description": "Language of the localized title", "type": "bigint"},
+              {"name": "attribute_id", "description": "Attribute describing the type of localized title", "type": "string"},
+              {"name": "is_original_title", "description": "Indicates whether this is the original title for the region/language", "type": "boolean"}
+            ]
+          },
+          {
+            "name": "title_person_role",
+            "description": "Fact table linking titles, people, and roles, describing who did what on each title.",
+            "columns": [
+              {"name": "title_id", "description": "Foreign key to the title", "type": "string"},
+              {"name": "person_id", "description": "Foreign key to the person", "type": "string"},
+              {"name": "role_id", "description": "Foreign key to the role", "type": "string"},
+              {"name": "job", "description": "Specific job performed by the person on the title", "type": "string"},
+              {"name": "number_of_roles", "description": "Number of distinct roles performed by the person in the title", "type": "bigint"},
+              {"name": "characters", "description": "Character names portrayed by the person, if applicable", "type": "map<string,string>"}
+            ]
+          },
+          {
+            "name": "title_type",
+            "description": "Lookup table defining the type of a title, such as movie, TV series, episode, or short.",
+            "columns": [
+              {"name": "title_type_id", "description": "Primary key identifying a title type", "type": "string"},
+              {"name": "title_type_name", "description": "Name of the title type", "type": "string"}
+            ]
+          }
+        ]
+      }
+    semantic_block: |
+      {
+        "semantic_layer": {
+          "version": "1.0",
+          "purpose": "Natural language to SQL translation",
+          "domain": "Movies, TV, people, localization",
+          "global_rules": [
+            "Always reason in semantic concepts before SQL",
+            "Prefer human-readable labels over IDs",
+            "IDs are resolved after query generation",
+            "Use bridge tables for many-to-many relationships",
+            "Assume filters are AND unless user specifies OR",
+            "When a person is mentioned, infer a role if possible"
+          ],
+          "entities": {
+            "title": {
+              "table": "title",
+              "primary_key": "title_id",
+              "description": "A creative work such as a movie, TV series, episode, short, or video game.",
+              "attributes": {
+                "title_id": "id",
+                "title_type_id": "id",
+                "primary_title": "string",
+                "original_title": "string",
+                "release_year": "integer",
+                "duration_minutes": "integer",
+                "average_rating": "float",
+                "number_of_votes": "integer",
+                "is_adult": "boolean"
+              },
+              "relationships": {
+                "type": {
+                  "entity": "title_type",
+                  "join": "title.title_type_id = title_type.title_type_id"
+                },
+                "genres": {
+                  "entity": "genre",
+                  "via": "genre_title",
+                  "joins": [
+                    "title.title_id = genre_title.title_id",
+                    "genre_title.genre_id = genre.genre_id"
+                  ]
+                },
+                "people": {
+                  "entity": "person",
+                  "via": "title_person_role",
+                  "joins": [
+                    "title.title_id = title_person_role.title_id",
+                    "title_person_role.person_id = person.person_id"
+                  ]
+                },
+                "localization": {
+                  "entity": "title_localized",
+                  "join": "title.title_id = title_localized.title_id"
+                },
+                "episodes": {
+                  "entity": "title_episode",
+                  "join": "title.title_id = title_episode.series_title_id"
+                }
+              }
+            },
+            "person": {
+              "table": "person",
+              "primary_key": "person_id",
+              "description": "A real person involved in a title (actor, director, writer, etc).",
+              "attributes": {
+                "person_id": "id",
+                "name": "string",
+                "birth_year": "integer",
+                "death_year": "integer"
+              }
+            },
+            "title_type": {
+              "type": "enum",
+              "table": "title_type",
+              "id_column": "title_type_id",
+              "label_column": "title_type_name",
+              "values": [
+                "movie",
+                "short",
+                "tvSeries",
+                "tvEpisode",
+                "tvMiniSeries",
+                "tvMovie",
+                "tvSpecial",
+                "tvShort",
+                "tvPilot",
+                "video",
+                "videoGame"
+              ],
+              "nl_mappings": {
+                "movie": "movie",
+                "film": "movie",
+                "series": "tvSeries",
+                "tv_show": "tvSeries",
+                "episode": "tvEpisode",
+                "mini_series": "tvMiniSeries",
+                "game": "videoGame"
+              }
+            },
+            "genre": {
+              "type": "enum",
+              "table": "genre",
+              "id_column": "genre_id",
+              "label_column": "genre_name",
+              "values": [
+                "Action",
+                "Adventure",
+                "Animation",
+                "Biography",
+                "Comedy",
+                "Crime",
+                "Documentary",
+                "Drama",
+                "Family",
+                "Fantasy",
+                "Film-Noir",
+                "Game-Show",
+                "History",
+                "Horror",
+                "Music",
+                "Musical",
+                "Mystery",
+                "News",
+                "Reality-TV",
+                "Romance",
+                "Sci-Fi",
+                "Short",
+                "Sport",
+                "Talk-Show",
+                "Thriller",
+                "War",
+                "Western"
+              ],
+              "rules": [
+                "Requires join via genre_title",
+                "Multiple genres imply AND unless stated otherwise"
+              ]
+            },
+            "role": {
+              "type": "enum",
+              "table": "role",
+              "id_column": "role_id",
+              "label_column": "role_name",
+              "groups": {
+                "acting": ["actor", "actress", "self"],
+                "directing": ["director", "assistant_director"],
+                "writing": ["writer"],
+                "producing": ["producer", "executive"],
+                "music": ["composer", "music_artist"],
+                "technical": ["cinematographer", "editor", "visual_effects", "sound_department"]
+              },
+              "nl_mappings": {
+                "acted_in": ["actor", "actress", "self"],
+                "starring": ["actor", "actress", "self"],
+                "directed_by": ["director"],
+                "written_by": ["writer"],
+                "produced_by": ["producer"]
+              },
+              "rules": [
+                "Role filters require title_person_role join",
+                "Job column is secondary to role_name"
+              ]
+            },
+            "language": {
+              "type": "enum",
+              "table": "languages",
+              "id_column": "language_id",
+              "label_column": "language_name",
+              "code_column": "language_code",
+              "common_languages": ["English", "Spanish", "French", "German", "Italian", "Japanese", "Korean", "Chinese"],
+              "aliases": {
+                "Farsi": "Persian",
+                "Mandarin": "Mandarin Chinese",
+                "Cantonese": "Cantonese",
+                "Chinese": "Chinese",
+                "Dari": "Dari"
+              },
+              "rules": [
+                "Language filters apply to title_localized.language_id",
+                "Accept language name or ISO code"
+              ]
+            },
+            "region": {
+              "type": "enum",
+              "table": "regions",
+              "id_column": "region_id",
+              "label_column": "region_name",
+              "code_column": "region_code",
+              "common_regions": ["United States", "United Kingdom", "France", "Spain", "Germany", "Japan"],
+              "aliases": {
+                "US": "United States",
+                "UK": "United Kingdom"
+              },
+              "rules": [
+                "Region filters apply to title_localized.region_id",
+                "Region usually refers to release or localization"
+              ]
+            },
+            "title_localized": {
+              "table": "title_localized",
+              "description": "Localized titles by region and language.",
+              "attributes": {
+                "title": "string",
+                "ordering": "integer",
+                "is_original_title": "boolean"
+              },
+              "relationships": {
+                "language": "language",
+                "region": "region"
+              },
+              "nl_rules": {
+                "original title": "is_original_title = true",
+                "French title": "language = French"
+              }
+            },
+            "canonical_patterns": [
+              {
+                "intent": "movies by person",
+                "interpretation": {
+                  "entity": "title",
+                  "filters": {
+                    "title_type": "movie",
+                    "person.name": "{person}",
+                    "role": "inferred"
+                  }
+                }
+              },
+              {
+                "intent": "titles by genre and year",
+                "interpretation": {
+                  "entity": "title",
+                  "filters": {
+                    "genre": "{genre}",
+                    "release_year": "{year_range}"
+                  }
+                }
+              },
+              {
+                "intent": "localized titles",
+                "interpretation": {
+                  "entity": "title",
+                  "filters": {
+                    "language": "{language}",
+                    "region": "{region}"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+  sampling:
+    temperature: 0.1
+    top_p: 0.9
