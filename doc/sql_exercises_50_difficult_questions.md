@@ -384,6 +384,56 @@ Calculate a 5-year moving average of the average rating for titles released each
 
 **Difficulty:** ⭐⭐⭐⭐⭐
 
+**Solution:**
+
+```sql
+WITH title_type_year_grouped AS (	
+    SELECT 
+        t.release_year,
+        tt.title_type_name,
+        COUNT(*) AS titles_released,
+        AVG(t.average_rating) AS avg_rating
+    FROM demo.silver.title t
+    JOIN demo.silver.title_type tt
+      ON t.title_type_id = tt.title_type_id
+    WHERE t.release_year IS NOT NULL
+    GROUP BY tt.title_type_name, t.release_year
+)
+
+SELECT
+    release_year,
+    title_type_name,
+    titles_released,
+    avg_rating,
+
+    -- running total of titles released
+    SUM(titles_released) OVER (
+        PARTITION BY title_type_name
+        ORDER BY release_year
+    ) AS running_total_titles,
+
+    -- cumulative (weighted) average rating
+    SUM(avg_rating * titles_released) OVER (
+        PARTITION BY title_type_name
+        ORDER BY release_year
+    )
+    /
+    SUM(titles_released) OVER (
+        PARTITION BY title_type_name
+        ORDER BY release_year
+    ) AS cumulative_avg_rating,
+
+    -- 5-year moving average of yearly avg ratings
+    AVG(avg_rating) OVER (
+        PARTITION BY title_type_name
+        ORDER BY release_year
+        ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
+    ) AS moving_avg_5yr
+
+FROM title_type_year_grouped
+ORDER BY title_type_name, release_year
+```
+
 ---
 
 ### Question 8: Lead/Lag Analysis
