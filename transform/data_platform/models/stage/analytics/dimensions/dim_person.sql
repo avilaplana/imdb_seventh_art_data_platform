@@ -3,4 +3,4 @@ SELECT
 	name, 
 	birth_year, 
 	death_year
-FROM {{ref('person')}}
+FROM {{ ref('person') }}
