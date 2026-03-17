@@ -19,9 +19,15 @@ models:
               to: ref('dim_title')
               field: title_id
 
-      - name: genre_name
-        description: Genre assigned to the title.
-        data_type: string
+      - name: genre_names
+        description: List of genre names associated with the title.
+        data_type: array<string>
+        tests:
+          - not_null
+
+      - name: genre_count
+        description: Count of genres associated with the title.
+        data_type: bigint
         tests:
           - not_null
 

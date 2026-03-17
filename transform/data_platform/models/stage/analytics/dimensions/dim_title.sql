@@ -4,8 +4,9 @@ SELECT
 	t.original_title, 
 	tt.title_type_name, 
     t.release_year, 
-	t.duration_minutes
+	t.duration_minutes,
 	t.is_adult, 
+    t.average_rating,
     t.number_of_votes,
     CASE
         WHEN t.release_year IS NULL THEN NULL
@@ -19,5 +20,5 @@ SELECT
         WHEN t.average_rating < 9 THEN '8-9'
         ELSE '9+'
     END AS rating_bucket
-FROM {{ ref('title') }} t
-JOIN {{ ref('title_type') }} tt ON t.title_type_id = tt.title_type_id
+FROM {{ source('stage_canonical', 'title') }} t
+JOIN {{ source('stage_canonical', 'title_type') }} tt ON t.title_type_id = tt.title_type_id

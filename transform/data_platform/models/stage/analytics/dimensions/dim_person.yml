@@ -18,7 +18,7 @@ models:
           - not_null
           - unique
 
-      - name: person_name
+      - name: name
         description: Full name of the person.
         data_type: string
         tests:
