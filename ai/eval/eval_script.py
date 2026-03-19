@@ -9,10 +9,10 @@ url = "http://localhost:8000/query"
 
 # Model & version
 model = "qwen2.5-coder"
-version = 5
+version = 6
 
 # Paths
-questions_to_eval = Path("/usr/app/ai/eval/questions.yml")
+questions_to_eval = Path("/usr/app/ai/eval/questions_analytics.yml")
 results_file = Path(f"/usr/app/ai/eval/{model}_v{version}_results.txt")
 
 # Load YAML

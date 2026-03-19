@@ -1,0 +1,412 @@
+eval_config:
+  version: 6
+  model: "qwen2.5-coder:7b"
+  description: >
+    NL→SQL eval config targeting the analytics layer (demo.stage_analytics).
+    Uses a flat star schema — no bridge tables needed for genres or title types.
+    Enum values for title_type, genre, role, rating_bucket, decade, regions,
+    languages, and title_context are embedded directly in the semantic layer.
+  window_size: 16384
+
+  prompt_templates:
+    system: |
+      You are a Spark SQL expert.
+
+      Your task is to generate ONE valid Spark SQL SELECT query that answers the user's question using ONLY the provided database schema, semantic layer, and rules.
+
+      Hard constraints:
+      - Output exactly ONE Spark SQL SELECT statement and nothing else
+      - Do NOT generate INSERT, UPDATE, DELETE, MERGE, CREATE, DROP, or any other non-SELECT statements
+      - Do NOT include explanations, comments, markdown, or code fences
+      - The SQL statement MUST end with a single semicolon
+
+      Dialect and syntax rules:
+      - Use standard Spark SQL syntax
+      - Use ONLY functions available in Spark SQL
+      - Do NOT use vendor-specific functions from other SQL dialects
+      - Use explicit JOIN syntax for all joins
+
+      Schema usage rules:
+      - Use ONLY tables and columns present in the provided schema
+      - Always qualify tables with demo.stage_analytics.<table>
+      - Never invent tables or columns not present in the schema
+
+      Join and selection rules:
+      - Always use explicit JOIN ... ON ... syntax
+      - Do NOT use SELECT *
+      - Use DISTINCT when joins could create duplicate rows
+
+      Domain rules:
+      - title_type_name and genre_name are plain string columns — filter directly, no join needed
+      - "movie" → title_type_name = 'movie'
+      - "TV series" / "series" → title_type_name = 'tvSeries'
+      - "episode" → title_type_name = 'tvEpisode'
+      - For cast/crew questions JOIN fact_title_cast_crew → dim_person on person_id
+      - For genre questions use fact_title_genre_flat (one row per title-genre)
+      - For episode questions use fact_episode (links episodes to their parent series)
+      - For localized title / region / language questions use fact_title_release
+
+      Column availability rules (CRITICAL — never access a column from the wrong table):
+      - fact_title_genre_flat does NOT have primary_title, original_title, duration_minutes, decade, or rating_bucket → JOIN dim_title to get those
+      - fact_title_genre_flat does NOT have rating_bucket → rating_bucket is only in dim_title
+      - fact_title_cast_crew does NOT have title_type_name → JOIN dim_title ON title_id and filter t.title_type_name there
+      - fact_title_cast_crew does NOT have primary_title or genre_name → JOIN dim_title for title name, JOIN fact_title_genre_flat for genre
+      - fact_title_release does NOT have average_rating or number_of_votes → JOIN dim_title to get rating metrics
+      - fact_episode has season_number, episode_number, series_primary_title, episode_primary_title, series_average_rating all denormalized — do NOT join dim_title for any of these
+      - dim_title does NOT have genre_name or series_average_rating → use fact_title_genre_flat and fact_episode respectively
+      - fact_title_genre_flat already has title_type_name — do NOT join dim_title just to filter by title type when querying fact_title_genre_flat
+      - When fact_title_genre_flat is aliased as f, genre_name is f.genre_name — do NOT invent a separate alias g for genre
+      - When joining fact_title_cast_crew with fact_title_genre_flat, use aliases like c (cast) and g (genre flat); genre_name comes from the genre flat alias g, never from the cast alias
+
+      Time and aggregation rules:
+      - release_year is an INT, not a DATE — NEVER use YEAR(release_year)
+      - "Last N years" → release_year >= YEAR(CURRENT_DATE()) - N
+      - Exclude NULL ratings when ranking or averaging (add average_rating IS NOT NULL)
+      - "Highest rated" / "best rated" / "top rated" → ORDER BY average_rating DESC
+      - "Most popular" / "most voted" → ORDER BY number_of_votes DESC
+      - "Longest" / "runtime" → ORDER BY duration_minutes DESC
+      - "Recent" / "latest" → ORDER BY release_year DESC
+      - "Oldest" → ORDER BY release_year ASC
+      - "Top N per group" → use ROW_NUMBER() OVER (PARTITION BY ... ORDER BY metric DESC) and filter WHERE rn <= N
+
+      Result size rules:
+      - "Top N" or "first N" with an explicit number → use LIMIT N
+      - "For each X" / "per X" without an explicit limit → do NOT add LIMIT
+
+      Output format:
+      - Your entire response MUST be exactly one Spark SQL SELECT statement ending with a semicolon
+      - Do NOT add any text before or after the SQL
+
+    user_template: |
+      DATABASE SCHEMA (read-only, do not modify):
+      {{ schema_block }}
+
+      SEMANTIC LAYER (natural language mappings and rules):
+      {{ semantic_block }}
+
+      SQL CONTRACT (STRICT):
+
+      Output rules:
+      - Output exactly ONE Spark SQL SELECT query and nothing else
+      - Do NOT include explanations, comments, markdown, or code fences
+      - The SQL query MUST end with a semicolon
+
+      SQL generation rules:
+      - Use ONLY tables and columns present in the schema_block
+      - Always qualify tables with demo.stage_analytics.<table>
+      - Always use explicit JOIN syntax (JOIN ... ON ...)
+      - Do NOT use SELECT *
+      - Use DISTINCT when joins could create duplicate rows
+      - title_type_name and genre_name are plain string columns — filter directly, no join needed
+      - NEVER select primary_title from fact_title_genre_flat or fact_title_cast_crew — JOIN dim_title for it
+      - NEVER filter fact_title_cast_crew by title_type_name — JOIN dim_title ON title_id and filter t.title_type_name there
+      - NEVER select genre_name from fact_title_cast_crew — JOIN fact_title_genre_flat ON title_id for genre_name
+      - NEVER select rating_bucket from fact_title_genre_flat — rating_bucket is only in dim_title
+      - NEVER join dim_title to get season_number, episode_number, series_average_rating, series_primary_title — they are in fact_episode directly
+      - NEVER filter dim_title by genre_name — it does not exist there, use fact_title_genre_flat
+      - In subqueries: only reference columns that are in the SELECT list of the subquery; reference the outer alias correctly
+
+      Examples (follow the same patterns, but adapt to the question):
+
+      EXAMPLE 1 (genre aggregation — fact_title_genre_flat has title_type_name, no dim_title join needed):
+      Question:
+      For each genre, what is the average rating of movies released after 2010?
+
+      SQL:
+      SELECT f.genre_name, ROUND(AVG(f.average_rating), 2) AS avg_rating
+      FROM demo.stage_analytics.fact_title_genre_flat f
+      WHERE f.title_type_name = 'movie'
+        AND f.release_year > 2010
+        AND f.average_rating IS NOT NULL
+      GROUP BY f.genre_name
+      ORDER BY avg_rating DESC;
+
+      EXAMPLE 2 (genre flat — top N per genre, with title name):
+      Question:
+      For each genre, list the top 3 movies by rating in the last 10 years.
+
+      SQL:
+      SELECT f.genre_name, t.primary_title, f.average_rating
+      FROM (
+        SELECT genre_name, title_id, average_rating,
+               ROW_NUMBER() OVER (PARTITION BY genre_name ORDER BY average_rating DESC) AS rn
+        FROM demo.stage_analytics.fact_title_genre_flat
+        WHERE title_type_name = 'movie'
+          AND release_year >= YEAR(CURRENT_DATE()) - 10
+          AND average_rating IS NOT NULL
+      ) f
+      JOIN demo.stage_analytics.dim_title t ON f.title_id = t.title_id
+      WHERE f.rn <= 3;
+
+      EXAMPLE 3 (cast/crew — filter by title type via dim_title JOIN):
+      Question:
+      List the top 10 directors by average rating across all their movies.
+
+      SQL:
+      SELECT p.name, ROUND(AVG(f.average_rating), 2) AS avg_rating
+      FROM demo.stage_analytics.fact_title_cast_crew f
+      JOIN demo.stage_analytics.dim_person p ON f.person_id = p.person_id
+      JOIN demo.stage_analytics.dim_title t ON f.title_id = t.title_id
+      WHERE f.role_name = 'director'
+        AND t.title_type_name = 'movie'
+        AND f.average_rating IS NOT NULL
+      GROUP BY p.name
+      ORDER BY avg_rating DESC
+      LIMIT 10;
+
+      EXAMPLE 4 (episode — best episodes of a series):
+      Question:
+      List the top 5 highest-rated episodes of Breaking Bad.
+
+      SQL:
+      SELECT episode_primary_title, season_number, episode_number, episode_average_rating
+      FROM demo.stage_analytics.fact_episode
+      WHERE LOWER(series_primary_title) = 'breaking bad'
+        AND episode_average_rating IS NOT NULL
+      ORDER BY episode_average_rating DESC
+      LIMIT 5;
+
+      EXAMPLE 5 (localized release — average_rating comes from dim_title, not fact_title_release):
+      Question:
+      Show the localized French titles of the top 20 highest-rated movies.
+
+      SQL:
+      SELECT t.primary_title, r.localized_title, t.average_rating
+      FROM demo.stage_analytics.fact_title_release r
+      JOIN demo.stage_analytics.dim_title t ON r.title_id = t.title_id
+      WHERE t.title_type_name = 'movie'
+        AND t.average_rating IS NOT NULL
+        AND r.language_name = 'French'
+      ORDER BY t.average_rating DESC
+      LIMIT 20;
+
+      EXAMPLE 6 (cross-fact: cast + genre — genre_name comes from fact_title_genre_flat, not fact_title_cast_crew):
+      Question:
+      For each genre, how many distinct directors have worked on movies in that genre?
+
+      SQL:
+      SELECT g.genre_name, COUNT(DISTINCT c.person_id) AS director_count
+      FROM demo.stage_analytics.fact_title_cast_crew c
+      JOIN demo.stage_analytics.dim_title t ON c.title_id = t.title_id
+      JOIN demo.stage_analytics.fact_title_genre_flat g ON c.title_id = g.title_id
+      WHERE c.role_name = 'director'
+        AND t.title_type_name = 'movie'
+      GROUP BY g.genre_name
+      ORDER BY director_count DESC;
+
+      EXAMPLE 7 (top N per group — correct subquery scoping):
+      Question:
+      For each of the last 5 years, list the top 3 directors by average rating with at least 3 movies that year.
+
+      SQL:
+      SELECT release_year, name, avg_rating
+      FROM (
+        SELECT f.release_year, p.name,
+               ROUND(AVG(f.average_rating), 2) AS avg_rating,
+               ROW_NUMBER() OVER (PARTITION BY f.release_year ORDER BY AVG(f.average_rating) DESC) AS rn
+        FROM demo.stage_analytics.fact_title_cast_crew f
+        JOIN demo.stage_analytics.dim_person p ON f.person_id = p.person_id
+        JOIN demo.stage_analytics.dim_title t ON f.title_id = t.title_id
+        WHERE f.role_name = 'director'
+          AND t.title_type_name = 'movie'
+          AND f.release_year >= YEAR(CURRENT_DATE()) - 5
+          AND f.average_rating IS NOT NULL
+        GROUP BY f.release_year, p.name
+        HAVING COUNT(DISTINCT f.title_id) >= 3
+      ) ranked
+      WHERE rn <= 3;
+
+      TASK:
+      Generate a single Spark SQL SELECT query that answers the following question:
+
+      "{{ question }}"
+
+    schema_block: |
+      {
+        "catalog": "demo",
+        "schema": "stage_analytics",
+        "tables": [
+          {
+            "name": "dim_title",
+            "description": "Dimension table for all titles (movies, series, episodes, etc.). title_type_name and genre are plain string columns — no joins needed to filter by type.",
+            "columns": [
+              { "name": "title_id", "type": "string", "description": "Primary key identifying a title" },
+              { "name": "primary_title", "type": "string", "description": "Main display title" },
+              { "name": "original_title", "type": "string", "description": "Original title in the language of production" },
+              { "name": "title_type_name", "type": "string", "description": "Type of title. Possible values: movie, short, tvSeries, tvEpisode, tvMiniSeries, tvMovie, tvPilot, tvSeries, tvShort, tvSpecial, video, videoGame" },
+              { "name": "release_year", "type": "integer", "description": "Year the title was released (integer, not a date)" },
+              { "name": "duration_minutes", "type": "integer", "description": "Runtime in minutes" },
+              { "name": "is_adult", "type": "boolean", "description": "Whether the title is adult content" },
+              { "name": "average_rating", "type": "numeric", "description": "Average IMDb user rating" },
+              { "name": "number_of_votes", "type": "integer", "description": "Number of user votes" },
+              { "name": "decade", "type": "string", "description": "Decade derived from release_year. Possible values: 1870s, 1880s, 1890s, 1900s, 1910s, 1920s, 1930s, 1940s, 1950s, 1960s, 1970s, 1980s, 1990s, 2000s, 2010s, 2020s" },
+              { "name": "rating_bucket", "type": "string", "description": "Rating range bucket. Possible values: 0-5, 5-7, 7-8, 8-9, 9+" }
+            ]
+          },
+          {
+            "name": "dim_person",
+            "description": "Dimension table for people involved in titles (actors, directors, writers, etc.).",
+            "columns": [
+              { "name": "person_id", "type": "string", "description": "Primary key identifying a person" },
+              { "name": "name", "type": "string", "description": "Full name of the person" },
+              { "name": "birth_year", "type": "integer", "description": "Year the person was born" },
+              { "name": "death_year", "type": "integer", "description": "Year the person died, if applicable" }
+            ]
+          },
+          {
+            "name": "fact_title_genre_flat",
+            "description": "One row per title-genre combination. ONLY these columns exist here: title_id, genre_name, title_type_name, release_year, is_adult, average_rating, number_of_votes. Does NOT have primary_title, original_title, duration_minutes, decade, or rating_bucket — JOIN dim_title to access those.",
+            "columns": [
+              { "name": "title_id", "type": "string", "description": "Foreign key to dim_title. JOIN dim_title ON title_id to get primary_title or other title attributes." },
+              { "name": "genre_name", "type": "string", "description": "Genre of the title. Possible values: Action, Adult, Adventure, Animation, Biography, Comedy, Crime, Documentary, Drama, Family, Fantasy, Film-Noir, Game-Show, History, Horror, Music, Musical, Mystery, News, Reality-TV, Romance, Sci-Fi, Short, Sport, Talk-Show, Thriller, War, Western" },
+              { "name": "title_type_name", "type": "string", "description": "Type of the title (same values as dim_title.title_type_name)" },
+              { "name": "release_year", "type": "integer", "description": "Release year of the title" },
+              { "name": "is_adult", "type": "boolean", "description": "Whether the title is adult content" },
+              { "name": "average_rating", "type": "numeric", "description": "Average IMDb rating" },
+              { "name": "number_of_votes", "type": "integer", "description": "Number of votes" }
+            ]
+          },
+          {
+            "name": "fact_title_cast_crew",
+            "description": "One row per person-title-role combination. ONLY these columns exist here: title_id, person_id, role_name, release_year, average_rating, number_of_votes. Does NOT have title_type_name or primary_title — JOIN dim_title ON title_id to filter by title type or get the title name.",
+            "foreign_keys": [
+              { "column": "title_id", "references": "dim_title.title_id" },
+              { "column": "person_id", "references": "dim_person.person_id" }
+            ],
+            "columns": [
+              { "name": "title_id", "type": "string", "description": "Foreign key to dim_title. JOIN dim_title ON title_id to filter by title_type_name or get primary_title." },
+              { "name": "person_id", "type": "string", "description": "Foreign key to dim_person. JOIN dim_person ON person_id to get the person name." },
+              { "name": "role_name", "type": "string", "description": "Role of the person. Possible values: actor, actress, director, writer, producer, composer, cinematographer, editor, self, and more" },
+              { "name": "release_year", "type": "integer", "description": "Release year (denormalized from dim_title)" },
+              { "name": "average_rating", "type": "numeric", "description": "Average rating of the title (denormalized from dim_title)" },
+              { "name": "number_of_votes", "type": "integer", "description": "Number of votes (denormalized from dim_title)" }
+            ]
+          },
+          {
+            "name": "fact_title_release",
+            "description": "Localized title information by region and language. ONLY these columns exist: title_id, localized_title, region_name, language_name, is_original_title. Does NOT have average_rating, number_of_votes, title_type_name, or release_year — JOIN dim_title for those.",
+            "foreign_keys": [
+              { "column": "title_id", "references": "dim_title.title_id" }
+            ],
+            "columns": [
+              { "name": "title_id", "type": "string", "description": "Foreign key to dim_title. JOIN dim_title to get average_rating, number_of_votes, title_type_name, release_year." },
+              { "name": "localized_title", "type": "string", "description": "Localized title text" },
+              { "name": "region_name", "type": "string", "description": "Region where the localized title is used (e.g. 'United States', 'France', 'Germany')" },
+              { "name": "language_name", "type": "string", "description": "Language of the localized title (e.g. 'English', 'French', 'Spanish')" },
+              { "name": "is_original_title", "type": "boolean", "description": "Whether this is the original title" }
+            ]
+          },
+          {
+            "name": "fact_episode",
+            "description": "One row per episode, fully self-contained. season_number, episode_number, series_primary_title, and episode_primary_title are all denormalized here — do NOT join dim_title to get them. Only join dim_title if you need title attributes not present here (e.g. duration_minutes).",
+            "columns": [
+              { "name": "series_title_id", "type": "string", "description": "Foreign key to the parent series in dim_title (only join if you need dim_title-specific attributes)" },
+              { "name": "episode_title_id", "type": "string", "description": "Foreign key to the episode in dim_title (only join if you need dim_title-specific attributes)" },
+              { "name": "season_number", "type": "integer", "description": "Season number — available directly, no join needed" },
+              { "name": "episode_number", "type": "integer", "description": "Episode number within the season — available directly, no join needed" },
+              { "name": "episode_primary_title", "type": "string", "description": "Primary title of the episode — available directly, no join needed" },
+              { "name": "episode_release_year", "type": "integer", "description": "Release year of the episode" },
+              { "name": "episode_average_rating", "type": "numeric", "description": "Average IMDb rating of the episode" },
+              { "name": "episode_number_of_votes", "type": "integer", "description": "Number of votes for the episode" },
+              { "name": "series_primary_title", "type": "string", "description": "Primary title of the parent series — use this to filter by series name, no join needed" },
+              { "name": "series_average_rating", "type": "numeric", "description": "Average IMDb rating of the parent series" }
+            ]
+          }
+        ]
+      }
+
+    semantic_block: |
+      {
+        "semantic_layer": {
+          "version": "2.0",
+          "target_schema": "demo.stage_analytics",
+          "purpose": "Natural language to Spark SQL translation on the analytics star schema",
+          "domain": "Movies, TV, people, localization",
+
+          "global_rules": [
+            "Always qualify tables as demo.stage_analytics.<table>.",
+            "title_type_name and genre_name are plain string columns — filter directly without joins.",
+            "Use fact_title_genre_flat for genre-based questions (one row per title-genre).",
+            "Use fact_title_cast_crew for cast and crew questions; always JOIN dim_person to get names.",
+            "Use fact_episode for episode and season questions.",
+            "Use fact_title_release for localized title, region, or language questions.",
+            "When joins can produce duplicates, use COUNT(DISTINCT title_id) when counting titles.",
+            "Exclude NULL ratings in ranking and averaging queries."
+          ],
+
+          "nl_aliases": {
+            "movie": { "column": "title_type_name", "value": "movie" },
+            "film": { "column": "title_type_name", "value": "movie" },
+            "TV series": { "column": "title_type_name", "value": "tvSeries" },
+            "series": { "column": "title_type_name", "value": "tvSeries" },
+            "mini-series": { "column": "title_type_name", "value": "tvMiniSeries" },
+            "TV movie": { "column": "title_type_name", "value": "tvMovie" },
+            "episode": { "column": "title_type_name", "value": "tvEpisode" },
+            "short": { "column": "title_type_name", "value": "short" },
+            "video game": { "column": "title_type_name", "value": "videoGame" },
+            "actor": { "column": "role_name", "value": "actor" },
+            "actress": { "column": "role_name", "value": "actress" },
+            "performer": { "column": "role_name", "values": ["actor", "actress"] },
+            "director": { "column": "role_name", "value": "director" },
+            "writer": { "column": "role_name", "value": "writer" },
+            "composer": { "column": "role_name", "value": "composer" },
+            "cinematographer": { "column": "role_name", "value": "cinematographer" },
+            "producer": { "column": "role_name", "value": "producer" }
+          },
+
+          "enum_values": {
+            "title_type_name": ["movie", "short", "tvSeries", "tvEpisode", "tvMiniSeries", "tvMovie", "tvPilot", "tvShort", "tvSpecial", "video", "videoGame"],
+            "genre_name": ["Action", "Adult", "Adventure", "Animation", "Biography", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "Film-Noir", "Game-Show", "History", "Horror", "Music", "Musical", "Mystery", "News", "Reality-TV", "Romance", "Sci-Fi", "Short", "Sport", "Talk-Show", "Thriller", "War", "Western"],
+            "role_name": ["actor", "actress", "director", "writer", "producer", "composer", "cinematographer", "editor", "self", "animation_department", "art_department", "art_director", "assistant_director", "camera_department", "casting_director", "choreographer", "costume_designer", "executive", "music_artist", "production_designer", "sound_department", "special_effects", "stunts", "visual_effects"],
+            "rating_bucket": ["0-5", "5-7", "7-8", "8-9", "9+"],
+            "decade": ["1870s", "1880s", "1890s", "1900s", "1910s", "1920s", "1930s", "1940s", "1950s", "1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s"],
+            "common_regions": {
+              "United States": "US", "United Kingdom": "GB", "France": "FR", "Germany": "DE",
+              "Spain": "ES", "Italy": "IT", "Japan": "JP", "South Korea": "KR", "India": "IN",
+              "Brazil": "BR", "Canada": "CA", "Australia": "AU", "Mexico": "MX", "Argentina": "AR",
+              "Russia": "RU", "China": "CN", "Sweden": "SE", "Denmark": "DK", "Norway": "NO"
+            },
+            "common_languages": {
+              "English": "en", "French": "fr", "Spanish": "es", "German": "de", "Italian": "it",
+              "Japanese": "ja", "Korean": "ko", "Portuguese": "pt", "Russian": "ru", "Chinese": "zh",
+              "Mandarin Chinese": "cmn", "Cantonese": "yue", "Hindi": "hi", "Arabic": "ar",
+              "Dutch": "nl", "Swedish": "sv", "Polish": "pl", "Turkish": "tr"
+            },
+            "title_context_categories": {
+              "version": "alternative edits or cuts (e.g. director's cut, short version, recut version)",
+              "distribution": "titles used for specific media formats (e.g. DVD box title, video box title)",
+              "festival": "titles used at film festivals (e.g. Cannes, Venice, Berlin)",
+              "translation": "translated or transliterated titles",
+              "marketing": "promotional titles (e.g. poster title)",
+              "release_context": "titles used during the release lifecycle (e.g. reissue title)",
+              "episode_context": "season-specific episode titles",
+              "unofficial": "bootleg or rumored titles",
+              "other": "fallback classification"
+            }
+          },
+
+          "aggregation_rules": [
+            "highest rated / best rated / top rated → ORDER BY average_rating DESC, filter average_rating IS NOT NULL",
+            "most popular / most voted → ORDER BY number_of_votes DESC",
+            "longest / runtime → ORDER BY duration_minutes DESC (use dim_title)",
+            "recent / latest → ORDER BY release_year DESC",
+            "oldest → ORDER BY release_year ASC",
+            "top N per group → ROW_NUMBER() OVER (PARTITION BY group_col ORDER BY metric DESC), filter WHERE rn <= N",
+            "for each year (all years) → GROUP BY release_year with no year filter unless specified",
+            "at least N titles → HAVING COUNT(DISTINCT title_id) >= N"
+          ],
+
+          "table_selection_guide": {
+            "filter or sort by title attributes (type, rating, year, decade, duration)": "dim_title",
+            "filter or aggregate by genre": "fact_title_genre_flat",
+            "questions about actors, directors, or any crew": "fact_title_cast_crew JOIN dim_person",
+            "episode listings, season aggregations, series ratings": "fact_episode",
+            "localized titles, regions, languages": "fact_title_release JOIN dim_title",
+            "combine genre + cast": "JOIN fact_title_genre_flat AND fact_title_cast_crew on title_id"
+          }
+        }
+      }
+
+  sampling:
+    temperature: 0.05
+    top_p: 0.8

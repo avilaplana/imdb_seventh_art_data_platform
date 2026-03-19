@@ -12,7 +12,7 @@ from jinja2 import Template
 # -----------------------------
 SPARK_THRIFT_HOST = "spark-thrift-server"
 SPARK_THRIFT_PORT = 10000
-DATABASE = "demo.stage_canonical"
+DATABASE = "demo.stage_analytics"
 LLM_MODEL = "qwen2.5-coder:7b"
 SPARK_JARS = ":".join(glob.glob("/opt/bitnami/spark/jars/*.jar"))
 

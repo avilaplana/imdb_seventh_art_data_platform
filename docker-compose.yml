@@ -27,6 +27,7 @@ x-airflow-env: &airflow-env
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
   AIRFLOW__CORE__LOAD_EXAMPLES: "false"
   AIRFLOW__WEBSERVER__SECRET_KEY: "b7c51d01e7c447d88a07de15efbf14cd"
+  AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
   S3_ENDPOINT: http://minio:9000
   AWS_ACCESS_KEY_ID: admin
   AWS_SECRET_ACCESS_KEY: password
