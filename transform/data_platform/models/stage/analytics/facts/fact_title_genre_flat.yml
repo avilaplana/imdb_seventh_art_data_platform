@@ -1,0 +1,51 @@
+version: 2
+
+models:
+  - name: fact_title_genre_flat
+    description: >
+      Fact table with one row per title-genre combination.
+      Denormalizes key title attributes from dim_title to enable simple
+      genre-based filtering and aggregation without ARRAY functions.
+      Designed for text-to-SQL use cases.
+
+    config:
+      contract:
+        enforced: true
+
+    columns:
+      - name: title_id
+        description: Foreign key referencing dim_title.
+        data_type: string
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_title')
+              field: title_id
+
+      - name: genre_name
+        description: Genre name associated with the title.
+        data_type: string
+        tests:
+          - not_null
+
+      - name: title_type_name
+        description: Type of the title (movie, tvSeries, short, etc.).
+        data_type: string
+        tests:
+          - not_null
+
+      - name: release_year
+        description: Release year of the title.
+        data_type: integer
+
+      - name: is_adult
+        description: Whether the title is adult content.
+        data_type: boolean
+
+      - name: average_rating
+        description: Average IMDb rating of the title.
+        data_type: numeric
+
+      - name: number_of_votes
+        description: Number of votes received by the title.
+        data_type: integer

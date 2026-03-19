@@ -1,0 +1,66 @@
+version: 2
+
+models:
+  - name: fact_episode
+    description: >
+      Fact table with one row per episode, linking each episode to its parent
+      TV series with season/episode position and ratings for both.
+      Enables episodic analysis: episode listings, season aggregations,
+      rating trends, and episode counts without needing a separate series dimension.
+
+    config:
+      contract:
+        enforced: true
+
+    columns:
+      - name: series_title_id
+        description: Foreign key to the parent TV series in dim_title.
+        data_type: string
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_title')
+              field: title_id
+              severity: warn
+
+      - name: episode_title_id
+        description: Foreign key to the episode title in dim_title.
+        data_type: string
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_title')
+              field: title_id
+              severity: warn
+
+      - name: season_number
+        description: Season number within the series.
+        data_type: integer
+
+      - name: episode_number
+        description: Episode number within the season.
+        data_type: integer
+
+      - name: episode_primary_title
+        description: Primary title of the episode.
+        data_type: string
+
+      - name: episode_release_year
+        description: Release year of the episode.
+        data_type: integer
+
+      - name: episode_average_rating
+        description: Average IMDb rating of the episode.
+        data_type: numeric
+
+      - name: episode_number_of_votes
+        description: Number of IMDb votes for the episode.
+        data_type: integer
+
+      - name: series_primary_title
+        description: Primary title of the parent TV series (denormalized).
+        data_type: string
+
+      - name: series_average_rating
+        description: Overall average IMDb rating of the parent TV series (denormalized).
+        data_type: numeric
