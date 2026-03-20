@@ -1,5 +1,4 @@
 from pathlib import Path
-import json
 import glob
 from ollama import Client
 import jaydebeapi
@@ -13,7 +12,6 @@ from jinja2 import Template
 SPARK_THRIFT_HOST = "spark-thrift-server"
 SPARK_THRIFT_PORT = 10000
 DATABASE = "demo.stage_analytics"
-LLM_MODEL = "qwen2.5-coder:7b"
 SPARK_JARS = ":".join(glob.glob("/opt/bitnami/spark/jars/*.jar"))
 
 # load schemas once
@@ -36,33 +34,40 @@ def load_prompt_configuration(model: str, version: int) -> Any:
     with open(f"/usr/app/ai/eval/version_control/{model}/eval_config_v{version}.yml", "r") as f:
         return yaml.safe_load(f)    
 
-def generate_sql_query_by_LLM(user_query: str, prompt_config: Any) -> Mapping[str, Any]:
+def _build_messages(user_query: str, prompt_config: Any, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    templates = prompt_config["eval_config"]["prompt_templates"]
 
-    # Render system prompt
-    system_prompt = prompt_config["eval_config"]["prompt_templates"]["system"]
-    
-    # Render user prompt (per question)
-    user_template = Template(prompt_config["eval_config"]["prompt_templates"]["user_template"])
-    user_prompt = user_template.render(
-        schema_block=prompt_config["eval_config"]["prompt_templates"]["schema_block"],
-        semantic_block=prompt_config["eval_config"]["prompt_templates"]["semantic_block"],
-        question=user_query
+    system_prompt = templates["system"]
+
+    user_prompt = Template(templates["user_template"]).render(
+        schema_block=templates["schema_block"],
+        semantic_block=templates["semantic_block"],
+        question=user_query,
     )
 
-    response = LLM_CLIENT.chat(
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    for attempt in history:
+        messages.append({"role": "assistant", "content": attempt["sql"]})
+        messages.append({"role": "user", "content": f"That query failed with error: {attempt['error']}\nPlease fix the SQL and output only valid SQL."})
+
+    return messages
+
+
+def generate_sql(user_query: str, prompt_config: Any, history: List[Dict[str, str]] = []) -> Mapping[str, Any]:
+    messages = _build_messages(user_query, prompt_config, history)
+    return LLM_CLIENT.chat(
         model=prompt_config["eval_config"]["model"],
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        messages=messages,
         options={
             "num_ctx": prompt_config["eval_config"]["window_size"],
             "temperature": prompt_config["eval_config"]["sampling"]["temperature"],
-            "top_p": prompt_config["eval_config"]["sampling"]["top_p"]
-            # "num_predict": prompt_config["eval_config"]["sampling"]["max_tokens"]
+            "top_p": prompt_config["eval_config"]["sampling"]["top_p"],
         }
     )
-    return response
 
 
 def execute_sql_query(sql: str) -> Dict[str, Any]:
@@ -74,19 +79,3 @@ def execute_sql_query(sql: str) -> Dict[str, Any]:
     return {"columns": columns, "rows": rows}
 
 
-def retry_sql(user_query: str, history: List[Dict[str, str]]) -> str:
-    prompt = f"""
-User query:
-{user_query}
-
-Previous failed attempts:
-{json.dumps(history, indent=2)}
-
-Generate a corrected Spark SQL query.
-Output only valid SQL.
-"""
-    response = LLM_CLIENT.chat(
-        model=LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response["message"]["content"].strip()

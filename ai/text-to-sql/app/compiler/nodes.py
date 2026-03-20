@@ -3,7 +3,7 @@ from . import capabilities
 import re
 
 def generate_llm_response_node(state: RunnerState) -> dict:
-    llm_response = capabilities.generate_sql_query_by_LLM(state["user_query"], state["prompt_config"])
+    llm_response = capabilities.generate_sql(state["user_query"], state["prompt_config"])
     return {"llm_response": llm_response}
 
 def load_prompt_configuration_node(state: RunnerState) -> dict:
@@ -22,10 +22,10 @@ def execute_sql_node(state: RunnerState) -> dict:
         return {"error": str(e)}
 
 def repair_sql_node(state: RunnerState) -> dict:
-    history = state["history"] + [{"sql": state["sql"], "error": state["error"]}]
-    sql = capabilities.retry_sql(state["user_query"], history)
+    history = state["history"] + [{"sql": state["sql_sanitised"], "error": state["error"]}]
+    llm_response = capabilities.generate_sql(state["user_query"], state["prompt_config"], history)
     return {
-        "sql": sql,
+        "llm_response": llm_response,
         "history": history,
         "retry_count": state["retry_count"] + 1,
         "error": None,

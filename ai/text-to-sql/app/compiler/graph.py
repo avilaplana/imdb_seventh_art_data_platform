@@ -9,7 +9,7 @@ from .nodes import (
     validate_sql_node,
 )
 
-MAX_RETRIES = 0 # To manage retries logic later on
+MAX_RETRIES = 3
 
 def build_graph():
     graph = StateGraph(RunnerState)
@@ -31,6 +31,6 @@ def build_graph():
         lambda s: "repair_sql" if s.get("error") and s["retry_count"] < MAX_RETRIES else END,
     )
 
-    graph.add_edge("repair_sql", "generate_sql")
+    graph.add_edge("repair_sql", "sanitize_sql")
 
     return graph.compile()
