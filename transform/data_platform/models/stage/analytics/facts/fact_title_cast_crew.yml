@@ -46,3 +46,10 @@ models:
       - name: number_of_votes
         description: Number of user votes received by the title.
         data_type: integer
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - title_id
+            - person_id
+            - role_name

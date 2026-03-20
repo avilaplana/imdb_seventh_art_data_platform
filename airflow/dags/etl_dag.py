@@ -305,7 +305,58 @@ with DAG(
 
 
     ############################################
-    # Step 9: Retry whole DAG on validation failure
+    # Step 9: Promote to prod (schema swap via dbt macros)
+    ############################################
+    dbt_promote_canonical_command = """run-operation promote_canonical_to_prod
+    --profiles-dir /usr/app/dbt
+    --target stage_canonical
+    --project-dir /usr/app/dbt/data_platform
+    """
+
+    dbt_promote_canonical_task = DockerOperator(
+        task_id="promote_DBT_stage_canonical_to_prod",
+        image="dbt-spark:f5bf2ec",
+        command=dbt_promote_canonical_command,
+        mounts=[
+                Mount(
+                    source=f"{projects_dir}/seventh_art_analytics/transform",
+                    target="/usr/app/dbt",
+                    type="bind",
+                )
+            ],
+        network_mode="seventh_art_analytics_iceberg_net",
+        docker_url="unix://var/run/docker.sock",
+        auto_remove=True,
+        tty=True,
+        mount_tmp_dir=False,
+    )
+
+    dbt_promote_analytics_command = """run-operation promote_analytics_to_prod
+    --profiles-dir /usr/app/dbt
+    --target stage_analytics
+    --project-dir /usr/app/dbt/data_platform
+    """
+
+    dbt_promote_analytics_task = DockerOperator(
+        task_id="promote_DBT_stage_analytics_to_prod",
+        image="dbt-spark:f5bf2ec",
+        command=dbt_promote_analytics_command,
+        mounts=[
+                Mount(
+                    source=f"{projects_dir}/seventh_art_analytics/transform",
+                    target="/usr/app/dbt",
+                    type="bind",
+                )
+            ],
+        network_mode="seventh_art_analytics_iceberg_net",
+        docker_url="unix://var/run/docker.sock",
+        auto_remove=True,
+        tty=True,
+        mount_tmp_dir=False,
+    )
+
+    ############################################
+    # Step 10: Retry whole DAG on validation failure
     ############################################
 
     wait_30_minutes = TimeDeltaSensor(
@@ -344,8 +395,8 @@ with DAG(
         dbt_analytics_run_task >> \
         dbt_analytics_validation_task
         
-    # Success path → reset retry counter
-    dbt_analytics_validation_task >> reset_retry_counter
+    # Success path → promote to prod → reset retry counter
+    dbt_analytics_validation_task >> dbt_promote_canonical_task >> dbt_promote_analytics_task >> reset_retry_counter
 
     # Failure path → wait → retry DAG
     dbt_analytics_validation_task >> wait_30_minutes

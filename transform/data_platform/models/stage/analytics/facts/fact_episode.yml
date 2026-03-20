@@ -64,3 +64,9 @@ models:
       - name: series_average_rating
         description: Overall average IMDb rating of the parent TV series (denormalized).
         data_type: numeric
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - series_title_id
+            - episode_title_id
